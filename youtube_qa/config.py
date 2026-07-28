@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
-    openai_api_key: str = ""
+    openai_api_key: str = "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"
 
     # ── Authentication ────────────────────────────────────────────────────────
     # Override SECRET_KEY in .env or environment for production

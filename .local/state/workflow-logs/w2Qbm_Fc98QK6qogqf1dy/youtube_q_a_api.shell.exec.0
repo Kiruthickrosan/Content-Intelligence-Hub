@@ -1,0 +1,13 @@
+[32mINFO[0m:     Will watch for changes in these directories: ['/home/runner/workspace']
+[32mINFO[0m:     Uvicorn running on [1mhttp://0.0.0.0:8000[0m (Press CTRL+C to quit)
+[32mINFO[0m:     Started reloader process [[36m[1m645[0m] using [36m[1mWatchFiles[0m
+[32mINFO[0m:     Started server process [[36m657[0m]
+[32mINFO[0m:     Waiting for application startup.
+2026-07-27 12:21:17,612  INFO      youtube_qa.main — Database tables ready: youtube_qa.db
+2026-07-27 12:21:18,267  ERROR     chromadb.telemetry.product.posthog — Failed to send telemetry event ClientStartEvent: capture() takes 1 positional argument but 3 were given
+2026-07-27 12:21:18,310  ERROR     chromadb.telemetry.product.posthog — Failed to send telemetry event ClientCreateCollectionEvent: capture() takes 1 positional argument but 3 were given
+2026-07-27 12:21:18,312  INFO      youtube_qa.services.vector_store — ChromaDB collection 'youtube_qa' ready (0 docs)
+2026-07-27 12:21:18,313  INFO      youtube_qa.main — Vector store ready — 0 chunks indexed
+2026-07-27 12:21:18,313  INFO      youtube_qa.main — YouTube Q&A API started  ·  docs at /docs
+[32mINFO[0m:     Application startup complete.
+[32mINFO[0m:     127.0.0.1:50154 - "[1mGET /health HTTP/1.1[0m" [32m200 OK[0m
