@@ -1,190 +1,279 @@
 """
-Audio → timestamped transcript via OpenAI Whisper API.
+Audio → timestamped transcript.
 
-Primary path : YouTube's own captions (via youtube-transcript-api) — free, instant.
-Fallback path: OpenAI Whisper API — for videos without captions.
+Primary path : YouTube automatic/manual captions via yt-dlp.
+Fallback path: Local Faster-Whisper transcription.
 
-The Whisper API accepts files up to 25 MB.  For longer audio the file is
-split into 10-minute segments before uploading.
+No OpenAI API credits are required for transcription.
 """
+
 import asyncio
+import html
 import logging
-import math
 import os
+import re
 import subprocess
+import sys
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from openai import AsyncOpenAI
-
-from ..config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
-# ── Primary: YouTube captions ─────────────────────────────────────────────────
+# ── VTT helpers ──────────────────────────────────────────────────────────────
 
-async def _try_youtube_transcript(video_id: str) -> Optional[List[Dict[str, Any]]]:
+_TIMESTAMP_RE = re.compile(
+    r"(?P<start>\d{2}:\d{2}(?::\d{2})?\.\d{3})\s+-->\s+"
+    r"(?P<end>\d{2}:\d{2}(?::\d{2})?\.\d{3})"
+)
+
+
+def _timestamp_to_seconds(timestamp: str) -> float:
     """
-    Attempt to fetch auto-generated or manually uploaded captions.
+    Convert VTT timestamp into seconds.
 
-    Returns a list of {text, start, end} dicts, or None if unavailable.
+    Supports:
+        MM:SS.mmm
+        HH:MM:SS.mmm
     """
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
-        def _fetch():
-            try:
-                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                # Prefer manual English, then auto-generated English, then any
-                for lang in ("en", "en-US", "en-GB"):
-                    try:
-                        t = transcript_list.find_transcript([lang])
-                        return t.fetch()
-                    except Exception:
-                        pass
-                # Fall back to auto-generated in any language
-                try:
-                    t = transcript_list.find_generated_transcript(
-                        [t.language_code for t in transcript_list]
-                    )
-                    return t.fetch()
-                except Exception:
-                    pass
-                return None
-            except (TranscriptsDisabled, NoTranscriptFound):
-                return None
+    parts = timestamp.split(":")
 
-        raw = await asyncio.to_thread(_fetch)
-        if not raw:
-            return None
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return (
+            int(minutes) * 60
+            + float(seconds)
+        )
 
-        # Normalise to {text, start, end}
-        segments = []
-        for item in raw:
-            segments.append({
-                "text": item["text"].strip(),
-                "start": float(item["start"]),
-                "end": float(item["start"]) + float(item.get("duration", 0)),
-            })
-        logger.info("Fetched YouTube captions for %s (%d segments)", video_id, len(segments))
-        return segments
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return (
+            int(hours) * 3600
+            + int(minutes) * 60
+            + float(seconds)
+        )
 
-    except ImportError:
-        logger.warning("youtube-transcript-api not installed; skipping caption fetch")
-        return None
-    except Exception as exc:
-        logger.warning("Caption fetch failed for %s: %s", video_id, exc)
-        return None
+    raise ValueError(f"Invalid VTT timestamp: {timestamp}")
 
 
-# ── Fallback: Whisper API ─────────────────────────────────────────────────────
+def _clean_caption_text(text: str) -> str:
+    """Clean VTT/HTML markup and normalize whitespace."""
 
-_MAX_WHISPER_BYTES = 24 * 1024 * 1024   # 24 MB — leave margin below 25 MB
-_SEGMENT_DURATION  = 600                 # 10 minutes per chunk
+    # Remove HTML/VTT tags such as <c>, </c>, <00:...>
+    text = re.sub(r"<[^>]+>", "", text)
+
+    # Decode entities such as &amp;
+    text = html.unescape(text)
+
+    # Normalize whitespace
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
-def _split_audio(audio_path: str, segment_sec: int = _SEGMENT_DURATION) -> List[tuple]:
+def _parse_vtt(vtt_path: Path) -> List[Dict[str, Any]]:
     """
-    Use ffprobe + ffmpeg to split an audio file into fixed-length segments.
+    Parse a WebVTT file into:
 
-    Returns a list of (path, offset_seconds) tuples; caller must clean up temp files.
+    {
+        "text": "...",
+        "start": 0.0,
+        "end": 3.2
+    }
     """
-    # Get duration
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
-        capture_output=True, text=True,
+
+    content = vtt_path.read_text(
+        encoding="utf-8",
+        errors="ignore",
     )
-    try:
-        total_sec = float(probe.stdout.strip())
-    except ValueError:
-        return [(audio_path, 0)]  # can't probe — try whole file
 
-    if total_sec <= segment_sec:
-        return [(audio_path, 0)]
+    lines = content.splitlines()
 
-    n_parts = math.ceil(total_sec / segment_sec)
-    parts = []
-    for i in range(n_parts):
-        fd, part_path = tempfile.mkstemp(suffix=".ogg")
-        os.close(fd)
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", audio_path,
-             "-ss", str(i * segment_sec),
-             "-t",  str(segment_sec),
-             "-c", "copy", part_path],
-            capture_output=True, check=True,
+    segments: List[Dict[str, Any]] = []
+
+    i = 0
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        match = _TIMESTAMP_RE.match(line)
+
+        if not match:
+            i += 1
+            continue
+
+        start = _timestamp_to_seconds(
+            match.group("start")
         )
-        parts.append((part_path, i * segment_sec))   # (path, offset_seconds)
-    return parts
+
+        end = _timestamp_to_seconds(
+            match.group("end")
+        )
+
+        i += 1
+
+        text_lines: List[str] = []
+
+        while i < len(lines):
+            text_line = lines[i].strip()
+
+            if not text_line:
+                break
+
+            # Stop if another timestamp block begins.
+            if _TIMESTAMP_RE.match(text_line):
+                i -= 1
+                break
+
+            text_lines.append(text_line)
+            i += 1
+
+        text = _clean_caption_text(
+            " ".join(text_lines)
+        )
+
+        if text:
+            segments.append({
+                "text": text,
+                "start": start,
+                "end": end,
+            })
+
+        i += 1
+
+    return segments
 
 
-async def _transcribe_with_whisper(audio_path: str) -> List[Dict[str, Any]]:
+# ── Primary: YouTube captions via yt-dlp ─────────────────────────────────────
+
+async def _try_youtube_transcript(
+    video_id: str,
+) -> Optional[List[Dict[str, Any]]]:
     """
-    Send audio to OpenAI Whisper and return timestamped segments.
+    Fetch YouTube automatic captions using yt-dlp.
 
-    Splits large files automatically.
+    Language priority:
+        1. ta-orig
+        2. ta
+
+    Each language is requested separately so that a failure
+    for one language does not prevent another language from working.
+
+    Returns:
+        List of {text, start, end} dictionaries, or None.
     """
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    file_size = os.path.getsize(audio_path)
 
-    # If file fits, send it directly
-    if file_size <= _MAX_WHISPER_BYTES:
-        parts_with_offsets = [(audio_path, 0)]
-    else:
-        logger.info("Audio (%d MB) exceeds Whisper limit — splitting", file_size // (1024**2))
-        parts_with_offsets = await asyncio.to_thread(_split_audio, audio_path)
+    def _fetch() -> Optional[List[Dict[str, Any]]]:
 
-    all_segments: List[Dict[str, Any]] = []
+        url = f"https://www.youtube.com/watch?v={video_id}"
 
-    for part_path, offset in parts_with_offsets:
-        try:
-            with open(part_path, "rb") as f:
-                response = await client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=f,
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"],
+        for language in ("ta-orig", "ta"):
+
+            with tempfile.TemporaryDirectory(
+                prefix=f"ytcaps_{video_id}_"
+            ) as temp_dir:
+
+                temp_path = Path(temp_dir)
+
+                output_template = str(
+                    temp_path / "%(id)s.%(language)s.%(ext)s"
                 )
-            for seg in (response.segments or []):
-                all_segments.append({
-                    "text":  seg.text.strip(),
-                    "start": seg.start + offset,
-                    "end":   seg.end   + offset,
-                })
-        finally:
-            # Remove temp split files (not the original)
-            if part_path != audio_path and os.path.exists(part_path):
-                os.remove(part_path)
 
-    logger.info("Whisper transcribed %d segments from %s", len(all_segments), audio_path)
-    return all_segments
+                command = [
+                    sys.executable,
+                    "-m",
+                    "yt_dlp",
 
+                    "--write-auto-subs",
 
-# ── Public API ────────────────────────────────────────────────────────────────
+                    "--sub-langs",
+                    language,
 
-async def transcribe(video_id: str, audio_path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Return a list of transcript segments: [{text, start, end}, ...].
+                    "--sub-format",
+                    "vtt",
 
-    1. Tries YouTube's own captions (fast, free).
-    2. Falls back to OpenAI Whisper on the downloaded audio file.
+                    "--skip-download",
+                    "--no-playlist",
 
-    Raises RuntimeError if both methods fail or audio_path is required but missing.
-    """
-    # Try captions first
-    segments = await _try_youtube_transcript(video_id)
-    if segments:
-        return segments
+                    "--output",
+                    output_template,
 
-    # Whisper fallback
-    if not audio_path:
-        raise RuntimeError(
-            f"No captions available for video {video_id} and no audio file was provided."
+                    url,
+                ]
+
+                logger.info(
+                    "Trying YouTube automatic captions: "
+                    "video=%s language=%s",
+                    video_id,
+                    language,
+                )
+
+                process = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+
+                caption_files = list(
+                    temp_path.glob("*.vtt")
+                )
+
+                # A caption file is enough to consider the attempt successful,
+                # even if yt-dlp also emitted warnings.
+                if caption_files:
+
+                    caption_file = caption_files[0]
+
+                    logger.info(
+                        "Caption downloaded successfully: %s",
+                        caption_file.name,
+                    )
+
+                    segments = _parse_vtt(
+                        caption_file
+                    )
+
+                    if segments:
+
+                        logger.info(
+                            "Using YouTube %s captions for %s "
+                            "(%d segments)",
+                            language,
+                            video_id,
+                            len(segments),
+                        )
+
+                        return segments
+
+                # No usable caption file for this language.
+                logger.warning(
+                    "No usable %s captions for %s. "
+                    "yt-dlp exit code=%s stderr=%s",
+                    language,
+                    video_id,
+                    process.returncode,
+                    process.stderr.strip() or "none",
+                )
+
+        logger.info(
+            "No usable YouTube captions found for %s",
+            video_id,
         )
-    if not os.path.exists(audio_path):
-        raise RuntimeError(f"Audio file not found: {audio_path}")
 
-    return await _transcribe_with_whisper(audio_path)
+        return None
+
+    try:
+        return await asyncio.to_thread(_fetch)
+
+    except Exception as exc:
+        logger.warning(
+            "Caption fetch failed for %s: %s",
+            video_id,
+            exc,
+        )
+        return None

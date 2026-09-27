@@ -1,92 +1,247 @@
 """
 SQLAlchemy ORM models — Channel, Video, User.
 """
+
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import (
-    Column, DateTime, Enum, ForeignKey, Integer, String, Text
-)
-from sqlalchemy.orm import relationship
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
 
 
-def _utcnow():
+def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
+
 class UserRole(str, enum.Enum):
     admin = "admin"
-    user  = "user"
+    user = "user"
 
 
 class ChannelStatus(str, enum.Enum):
-    active     = "active"
+    active = "active"
     processing = "processing"
-    error      = "error"
+    error = "error"
 
 
 class VideoStatus(str, enum.Enum):
-    pending      = "pending"
-    downloading  = "downloading"
+    pending = "pending"
+    downloading = "downloading"
     transcribing = "transcribing"
-    indexing     = "indexing"
-    completed    = "completed"
-    failed       = "failed"
+    indexing = "indexing"
+    completed = "completed"
+    failed = "failed"
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── User ──────────────────────────────────────────────────────────────────────
+
 
 class User(Base):
     __tablename__ = "users"
 
-    id              = Column(Integer, primary_key=True, index=True)
-    username        = Column(String(50),  unique=True, index=True, nullable=False)
-    email           = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role            = Column(Enum(UserRole), default=UserRole.user, nullable=False)
-    created_at      = Column(DateTime, default=_utcnow)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
 
-    channels = relationship("Channel", back_populates="owner")
+    username: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    hashed_password: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole),
+        default=UserRole.user,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=_utcnow,
+    )
+
+    channels: Mapped[list["Channel"]] = relationship(
+        "Channel",
+        back_populates="owner",
+    )
+
+
+# ── Channel ───────────────────────────────────────────────────────────────────
 
 
 class Channel(Base):
     __tablename__ = "channels"
 
-    id            = Column(Integer, primary_key=True, index=True)
-    channel_id    = Column(String(255), unique=True, index=True, nullable=False)  # YouTube ID
-    name          = Column(String(255), nullable=False)
-    url           = Column(String(500),  nullable=False)
-    description   = Column(Text,         nullable=True)
-    thumbnail_url = Column(String(500),  nullable=True)
-    video_count   = Column(Integer,      default=0)
-    status        = Column(Enum(ChannelStatus), default=ChannelStatus.active, nullable=False)
-    added_by      = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at    = Column(DateTime, default=_utcnow)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
 
-    owner  = relationship("User",  back_populates="channels")
-    videos = relationship("Video", back_populates="channel", cascade="all, delete-orphan")
+    channel_id: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    url: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    thumbnail_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    video_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    status: Mapped[ChannelStatus] = mapped_column(
+        Enum(ChannelStatus),
+        default=ChannelStatus.active,
+        nullable=False,
+    )
+
+    added_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=_utcnow,
+    )
+
+    owner: Mapped["User | None"] = relationship(
+        "User",
+        back_populates="channels",
+    )
+
+    videos: Mapped[list["Video"]] = relationship(
+        "Video",
+        back_populates="channel",
+        cascade="all, delete-orphan",
+    )
+
+
+# ── Video ─────────────────────────────────────────────────────────────────────
 
 
 class Video(Base):
     __tablename__ = "videos"
 
-    id            = Column(Integer, primary_key=True, index=True)
-    video_id      = Column(String(255), unique=True, index=True, nullable=False)  # YouTube ID
-    channel_id    = Column(Integer, ForeignKey("channels.id"), nullable=False)
-    title         = Column(String(500), nullable=False)
-    url           = Column(String(500), nullable=False)
-    duration      = Column(Integer,     nullable=True)   # seconds
-    upload_date   = Column(String(20),  nullable=True)   # YYYYMMDD from yt-dlp
-    thumbnail_url = Column(String(500), nullable=True)
-    status        = Column(Enum(VideoStatus), default=VideoStatus.pending, nullable=False)
-    error_message = Column(Text,    nullable=True)
-    chunk_count   = Column(Integer, default=0)
-    processed_at  = Column(DateTime, nullable=True)
-    created_at    = Column(DateTime, default=_utcnow)
-    updated_at    = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
 
-    channel = relationship("Channel", back_populates="videos")
+    video_id: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    channel_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("channels.id"),
+        nullable=False,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+    )
+
+    url: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+    )
+
+    duration: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    upload_date: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    thumbnail_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    status: Mapped[VideoStatus] = mapped_column(
+        Enum(VideoStatus),
+        default=VideoStatus.pending,
+        nullable=False,
+    )
+
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    chunk_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )
+
+    processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=_utcnow,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+    channel: Mapped["Channel"] = relationship(
+        "Channel",
+        back_populates="videos",
+    )

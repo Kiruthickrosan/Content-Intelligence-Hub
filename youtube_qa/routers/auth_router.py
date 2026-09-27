@@ -2,6 +2,7 @@
 Authentication endpoints — register, login.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from ..auth import create_access_token, hash_password, verify_password
@@ -40,20 +41,38 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
     """
     Exchange credentials for a JWT access token.
 
     The token is valid for 24 hours and must be sent as a Bearer token
     on all protected endpoints.
     """
-    user = db.query(User).filter(User.username == body.username).first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    user = (
+        db.query(User)
+        .filter(User.username == form_data.username)
+        .first()
+    )
+
+    if not user or not verify_password(
+        form_data.password,
+        user.hashed_password,
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
-    token = create_access_token({"sub": user.username, "role": user.role.value})
+
+    token = create_access_token(
+        {
+            "sub": user.username,
+            "role": user.role.value,
+        }
+    )
+
     return TokenResponse(access_token=token)
 
 

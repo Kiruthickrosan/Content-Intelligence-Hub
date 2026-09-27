@@ -28,6 +28,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from .config import get_settings
 from .database import Base, engine, SessionLocal
+from . import models
 from .middleware.rate_limit import limiter
 from .routers import auth_router, channels, qa, videos
 from .schemas import HealthResponse

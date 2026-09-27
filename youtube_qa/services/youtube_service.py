@@ -4,19 +4,22 @@ YouTube integration — fetch channel metadata, list videos, download audio.
 Uses yt-dlp under the hood. Only the audio track is kept on disk; the
 video file is deleted immediately after extraction to conserve space.
 """
+
 import asyncio
 import logging
 import os
 import re
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import yt_dlp
+from yt_dlp.utils import DownloadError
 
 logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _quiet_opts(extra: dict | None = None) -> dict:
     """Base yt-dlp options — silent unless an error occurs."""
@@ -54,6 +57,7 @@ def _normalise_channel_url(url: str) -> str:
 
 # ── Channel info ──────────────────────────────────────────────────────────────
 
+
 async def get_channel_info(url: str) -> Dict[str, Any]:
     """
     Fetch basic channel metadata without downloading anything.
@@ -64,12 +68,14 @@ async def get_channel_info(url: str) -> Dict[str, Any]:
     url = _normalise_channel_url(url)
 
     def _fetch() -> Dict[str, Any]:
-        opts = _quiet_opts({
-            "extract_flat": "in_playlist",
-            "playlist_items": "1",      # just enough to resolve the channel
-            "skip_download": True,
-        })
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        opts = _quiet_opts(
+            {
+                "extract_flat": "in_playlist",
+                "playlist_items": "1",  # just enough to resolve the channel
+                "skip_download": True,
+            }
+        )
+        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
             info = ydl.extract_info(url, download=False)
 
         if info is None:
@@ -77,12 +83,14 @@ async def get_channel_info(url: str) -> Dict[str, Any]:
 
         # yt-dlp returns a playlist-like object for channels
         channel_id = info.get("channel_id") or info.get("id", "")
-        name = info.get("channel") or info.get("uploader") or info.get("title", "Unknown")
+        name = (
+            info.get("channel") or info.get("uploader") or info.get("title", "Unknown")
+        )
         description = info.get("description", "")
         thumbnails = info.get("thumbnails") or []
         thumbnail_url = thumbnails[-1]["url"] if thumbnails else info.get("thumbnail")
         entries = info.get("entries") or []
-        video_count = info.get("playlist_count") or len(entries)
+        video_count = info.get("playlist_count") or 0
 
         return {
             "channel_id": channel_id,
@@ -98,49 +106,69 @@ async def get_channel_info(url: str) -> Dict[str, Any]:
 
 # ── Video listing ─────────────────────────────────────────────────────────────
 
+
 async def get_channel_videos(channel_url: str) -> List[Dict[str, Any]]:
     """
-    Return a list of all video metadata for the channel.
-
-    Each item contains: video_id, title, url, duration, upload_date, thumbnail_url.
+    Return all uploaded videos from a YouTube channel.
     """
+
     url = _normalise_channel_url(channel_url)
 
+    # Force yt-dlp to read the Uploads tab
+    if "/videos" not in url:
+        url = f"{url}/videos"
+
     def _fetch() -> List[Dict[str, Any]]:
-        opts = _quiet_opts({
-            "extract_flat": True,
-            "skip_download": True,
-        })
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        opts = _quiet_opts(
+            {
+                "extract_flat": "in_playlist",
+                "playlistend": 1000,  # fetch up to 1000 uploads
+                "skip_download": True,
+            }
+        )
+
+        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        if info is None:
+        if not info:
             return []
 
         entries = info.get("entries") or []
+
         videos = []
+
         for entry in entries:
+
             if not entry:
                 continue
-            vid_id = entry.get("id") or entry.get("video_id", "")
-            if not vid_id:
+
+            video_id = entry.get("id")
+
+            if not video_id:
                 continue
+
             thumbnails = entry.get("thumbnails") or []
-            thumb = thumbnails[-1]["url"] if thumbnails else entry.get("thumbnail")
-            videos.append({
-                "video_id": vid_id,
-                "title": entry.get("title", "Untitled"),
-                "url": entry.get("webpage_url") or f"https://www.youtube.com/watch?v={vid_id}",
-                "duration": entry.get("duration"),
-                "upload_date": entry.get("upload_date"),
-                "thumbnail_url": thumb,
-            })
+
+            videos.append(
+                {
+                    "video_id": video_id,
+                    "title": entry.get("title", "Untitled"),
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "duration": entry.get("duration"),
+                    "upload_date": entry.get("upload_date"),
+                    "thumbnail_url": (
+                        thumbnails[-1]["url"] if thumbnails else entry.get("thumbnail")
+                    ),
+                }
+            )
+
         return videos
 
     return await asyncio.to_thread(_fetch)
 
 
 # ── Audio download ────────────────────────────────────────────────────────────
+
 
 async def download_audio(video_url: str, output_dir: str) -> str:
     """
@@ -159,16 +187,21 @@ async def download_audio(video_url: str, output_dir: str) -> str:
     template = os.path.join(output_dir, f"{stem}.%(ext)s")
 
     def _download() -> str:
-        opts = _quiet_opts({
-            "format": "bestaudio[abr<=64]/bestaudio/best",
-            "outtmpl": template,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "opus",
-                "preferredquality": "32",
-            }],
-        })
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        opts = _quiet_opts(
+            {
+                "format": "bestaudio[abr<=64]/bestaudio/best",
+                "outtmpl": template,
+                "ffmpeg_location": r"C:\Users\Kiruthickrosan K\Downloads\ffmpeg-8.1.2-essentials_build\ffmpeg-8.1.2-essentials_build\bin",
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "opus",
+                        "preferredquality": "32",
+                    }
+                ],
+            }
+        )
+        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
             result = ydl.extract_info(video_url, download=True)
 
         if result is None:
@@ -195,5 +228,5 @@ async def download_audio(video_url: str, output_dir: str) -> str:
 
     try:
         return await asyncio.to_thread(_download)
-    except yt_dlp.utils.DownloadError as exc:
+    except DownloadError as exc:
         raise RuntimeError(f"Download failed: {exc}") from exc
