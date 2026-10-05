@@ -179,19 +179,37 @@ async def download_audio(video_url: str, output_dir: str) -> str:
 
     Raises RuntimeError on download failure.
     """
+
     os.makedirs(output_dir, exist_ok=True)
 
     # Extract video ID for a stable filename
-    vid_id_match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})", video_url)
+    vid_id_match = re.search(
+        r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{11})",
+        video_url,
+    )
+
     stem = vid_id_match.group(1) if vid_id_match else "audio"
-    template = os.path.join(output_dir, f"{stem}.%(ext)s")
+
+    template = os.path.join(
+        output_dir,
+        f"{stem}.%(ext)s",
+    )
 
     def _download() -> str:
+
         opts = _quiet_opts(
             {
                 "format": "bestaudio[abr<=64]/bestaudio/best",
                 "outtmpl": template,
-                "ffmpeg_location": r"C:\Users\Kiruthickrosan K\Downloads\ffmpeg-8.1.2-essentials_build\ffmpeg-8.1.2-essentials_build\bin",
+                "ffmpeg_location": (
+                    r"C:\Users\Kiruthickrosan K\Downloads"
+                    r"\ffmpeg-8.1.2-essentials_build"
+                    r"\ffmpeg-8.1.2-essentials_build\bin"
+                ),
+                "retries": 5,
+                "fragment_retries": 5,
+                "sleep_interval": 2,
+                "max_sleep_interval": 6,
                 "postprocessors": [
                     {
                         "key": "FFmpegExtractAudio",
@@ -201,32 +219,139 @@ async def download_audio(video_url: str, output_dir: str) -> str:
                 ],
             }
         )
-        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
-            result = ydl.extract_info(video_url, download=True)
+
+        # Try browser cookies to reduce YouTube 429/auth issues.
+        for browser in (
+            "chrome",
+            "edge",
+            "firefox",
+        ):
+            try:
+
+                test_opts = dict(opts)
+
+                test_opts["cookiesfrombrowser"] = (browser,)
+
+                with yt_dlp.YoutubeDL(cast(Any, test_opts)) as ydl:
+
+                    result = ydl.extract_info(
+                        video_url,
+                        download=True,
+                    )
+
+                opts = test_opts
+
+                logger.info(
+                    "Audio download using %s cookies",
+                    browser,
+                )
+
+                break
+
+            except Exception:
+                continue
+
+        else:
+            # No browser worked — try without cookies.
+            with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
+
+                result = ydl.extract_info(
+                    video_url,
+                    download=True,
+                )
 
         if result is None:
             raise RuntimeError(f"yt-dlp returned no info for {video_url}")
 
-        # Find the output file (extension may vary)
+        # Check expected audio extensions first.
         for candidate in [
-            os.path.join(output_dir, f"{stem}.opus"),
-            os.path.join(output_dir, f"{stem}.webm"),
-            os.path.join(output_dir, f"{stem}.ogg"),
-            os.path.join(output_dir, f"{stem}.m4a"),
-            os.path.join(output_dir, f"{stem}.mp3"),
+            os.path.join(
+                output_dir,
+                f"{stem}.opus",
+            ),
+            os.path.join(
+                output_dir,
+                f"{stem}.webm",
+            ),
+            os.path.join(
+                output_dir,
+                f"{stem}.ogg",
+            ),
+            os.path.join(
+                output_dir,
+                f"{stem}.m4a",
+            ),
+            os.path.join(
+                output_dir,
+                f"{stem}.mp3",
+            ),
         ]:
+
             if os.path.exists(candidate):
-                logger.info("Audio downloaded: %s", candidate)
+
+                logger.info(
+                    "Audio downloaded: %s",
+                    candidate,
+                )
+
                 return candidate
 
-        # Fallback: find any file starting with stem
+        # Final fallback: find any file starting with the video ID.
         for fname in os.listdir(output_dir):
+
             if fname.startswith(stem):
-                return os.path.join(output_dir, fname)
 
-        raise RuntimeError(f"Could not locate downloaded audio file for {video_url}")
+                return os.path.join(
+                    output_dir,
+                    fname,
+                )
 
-    try:
-        return await asyncio.to_thread(_download)
-    except DownloadError as exc:
-        raise RuntimeError(f"Download failed: {exc}") from exc
+        raise RuntimeError(
+            f"Could not locate downloaded audio file " f"for {video_url}"
+        )
+
+    # Run blocking yt-dlp work in a worker thread.
+    return await asyncio.to_thread(_download)
+
+
+# ── Single video metadata ──────────────────────────────────────────────────────
+
+
+async def get_video_info(video_url: str) -> Dict[str, Any]:
+    """
+    Fetch metadata for a single YouTube video without downloading it.
+
+    Returns a dict with:
+        video_id, title, duration, upload_date, thumbnail_url,
+        channel_id, channel_name, channel_url, channel_description
+    """
+
+    def _fetch() -> Dict[str, Any]:
+        opts = _quiet_opts(
+            {
+                "skip_download": True,
+                "no_playlist": True,
+            }
+        )
+        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+
+        if info is None:
+            raise ValueError(f"yt-dlp returned no info for {video_url}")
+
+        thumbnails = info.get("thumbnails") or []
+        thumbnail_url = thumbnails[-1]["url"] if thumbnails else info.get("thumbnail")
+
+        return {
+            "video_id": info.get("id", ""),
+            "title": info.get("title", "Untitled"),
+            "duration": info.get("duration"),
+            "upload_date": info.get("upload_date"),
+            "thumbnail_url": thumbnail_url,
+            "channel_id": info.get("channel_id") or info.get("uploader_id", ""),
+            "channel_name": info.get("channel") or info.get("uploader", "Unknown"),
+            "channel_url": info.get("channel_url") or info.get("uploader_url", ""),
+            "channel_description": info.get("description", ""),
+        }
+
+    return await asyncio.to_thread(_fetch)

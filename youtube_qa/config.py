@@ -1,7 +1,7 @@
 """
 Central configuration — reads from environment variables and .env file.
 """
-import os
+
 import secrets
 from functools import lru_cache
 
@@ -15,34 +15,38 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── OpenAI ────────────────────────────────────────────────────────────────
-    openai_api_key: str = ""
+    # ── Gemini ────────────────────────────────────────────────────────────────
+    gemini_api_key: str = ""
+
+    # Gemini model used for:
+    # - RAG answers
+    # - Channel one-line descriptions
+    chat_model: str = "gemini-3.8-flash"
+
+    # ── Embeddings ────────────────────────────────────────────────────────────
+    # Local sentence-transformers model.
+    #
+    # all-MiniLM-L6-v2 → 384-dimensional vectors, fast and free.
+    embedding_model: str = "all-MiniLM-L6-v2"
 
     # ── Authentication ────────────────────────────────────────────────────────
-    # Override SECRET_KEY in .env or environment for production
     secret_key: str = secrets.token_hex(32)
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
 
     # ── Processing ────────────────────────────────────────────────────────────
-    # Transcript chunking
-    chunk_size: int = 400       # approximate words per chunk
-    chunk_overlap: int = 60     # overlapping words between neighboring chunks
-
-    # OpenAI models
-    embedding_model: str = "text-embedding-3-small"
-    chat_model: str = "gpt-4o-mini"
-
-    # Retrieval
+    chunk_size: int = 400
+    chunk_overlap: int = 60
     top_k_results: int = 8
-
-    # Concurrency
     max_concurrent_downloads: int = 3
 
     # ── Storage ───────────────────────────────────────────────────────────────
     db_path: str = "youtube_qa.db"
     chroma_path: str = "./chroma_db"
     audio_temp_dir: str = "./temp_audio"
+
+    # ── YouTube cookies ───────────────────────────────────────────────────────
+    youtube_cookies_file: str = "./youtube_cookies.txt"
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit: str = "20/minute"

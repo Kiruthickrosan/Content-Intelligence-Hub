@@ -1,11 +1,12 @@
+# Environment / secrets
+.env
+youtube_cookies.txt
+
 # Python
 .venv/
 venv/
 __pycache__/
 *.py[cod]
-
-# Environment variables
-.env
 
 # IDE
 .vscode/
@@ -14,3 +15,14 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local databases
+youtube_qa.db
+chroma_db/
+
+# Generated audio
+temp_audio/
+audio_temp/
+
+# Downloaded transcripts / test artifacts
+*.vtt

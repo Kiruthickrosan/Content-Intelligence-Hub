@@ -26,13 +26,17 @@ from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+# from youtube_qa.routers import submit
+
 from .config import get_settings
 from .database import Base, engine, SessionLocal
 from . import models
 from .middleware.rate_limit import limiter
-from .routers import auth_router, channels, qa, videos
+# from .routers import auth_router, channels, qa, videos
 from .schemas import HealthResponse
 from .services import vector_store
+from .routers import auth_router, channels, qa, videos, submit
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -99,10 +103,11 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
-app.include_router(auth_router.router)
+app.include_router(auth_router)
 app.include_router(channels.router)
 app.include_router(videos.router)
 app.include_router(qa.router)
+app.include_router(submit.router)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
