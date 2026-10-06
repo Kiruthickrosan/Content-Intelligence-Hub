@@ -33,3 +33,19 @@ Thumbs.db
 # Python cache
 __pycache__/
 *.py[cod]
+# Backend - ignore old Replit/Node scaffolding
+Backend/.local/
+Backend/artifacts/
+Backend/lib/
+Backend/scripts/
+Backend/.npmrc
+Backend/.replit
+Backend/.replitignore
+Backend/package.json
+Backend/pnpm-lock.yaml
+Backend/pnpm-workspace.yaml
+Backend/replit.md
+Backend/replit.nix
+Backend/test_openai.py
+Backend/tsconfig.base.json
+Backend/tsconfig.json
