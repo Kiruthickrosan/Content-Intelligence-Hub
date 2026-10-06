@@ -1,28 +1,35 @@
-# Environment / secrets
-.env
-youtube_cookies.txt
+# Backend local files
+Backend/.venv/
+Backend/venv/
+Backend/node_modules/
+Backend/.git-backup/
+Backend/.env
+Backend/youtube_cookies.txt
+Backend/youtube_qa.db
+Backend/chroma_db/
+Backend/temp_audio/
+Backend/audio_temp/
+Backend/*.vtt
+Backend/__pycache__/
+Backend/**/*.pyc
 
-# Python
-.venv/
-venv/
-__pycache__/
-*.py[cod]
+# Frontend local files
+Frontend/node_modules/
+Frontend/dist/
+Frontend/.output/
+Frontend/.vinxi/
+Frontend/.tanstack/
+Frontend/.nitro/
+Frontend/.wrangler/
+Frontend/.env
+Frontend/.env.local
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Local databases
-youtube_qa.db
-chroma_db/
-
-# Generated audio
-temp_audio/
-audio_temp/
-
-# Downloaded transcripts / test artifacts
-*.vtt
+# Python cache
+__pycache__/
+*.py[cod]
